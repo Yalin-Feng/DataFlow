@@ -11,8 +11,7 @@
 
 import os, argparse, requests, sys
 from colorama import init as color_init, Fore, Style
-
-from dataflow.cli_funcs import cli_env, cli_init       # 项目已有工具
+from dataflow.cli_funcs import cli_env, cli_init, cli_sft      # 项目已有工具
 from dataflow.version import __version__               # 版本号
 
 color_init(autoreset=True)
@@ -76,6 +75,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     w_sub.add_parser("agent",     help="Launch DataFlow-Agent UI (backend included)")
     w_sub.add_parser("pdf",   help="Launch PDF Knowledge Base Cleaning UI")
 
+    # --- sft (NEW) ---
+    p_sft = top.add_parser("sft", help="PDF to SFT training pipeline")
+    p_sft.add_argument("--yaml", default="train_config.yaml", help="YAML config file path")
+
     return parser
 
 
@@ -93,6 +96,10 @@ def main() -> None:
 
     elif args.command == "env":
         cli_env()
+    elif args.command == "sft":
+        from dataflow.cli_funcs.cli_sft import cli_sft
+        # SFT 命令处理 - 按照DataFlow风格
+        cli_sft(config_path=args.yaml)
 
     elif args.command == "webui":
         # 默认使用 operators
