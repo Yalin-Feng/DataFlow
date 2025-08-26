@@ -77,7 +77,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # --- sft (NEW) ---
     p_sft = top.add_parser("sft", help="PDF to SFT training pipeline")
-    p_sft.add_argument("--yaml", default="train_config.yaml", help="YAML config file path")
+    p_sft.add_argument("--pdf_path", default="./pdf", help="PDF input directory path")
+    p_sft.add_argument("--lf_yaml", default="train_config.yaml", help="LlamaFactory YAML config file path")
+    p_sft.add_argument("--cache", default="./", help="Cache directory path")
 
     return parser
 
@@ -99,7 +101,7 @@ def main() -> None:
     elif args.command == "sft":
         from dataflow.cli_funcs.cli_sft import cli_sft
         # SFT 命令处理 - 按照DataFlow风格
-        cli_sft(config_path=args.yaml)
+        cli_sft(pdf_path=args.pdf_path, lf_yaml=args.lf_yaml, cache_path=args.cache)
 
     elif args.command == "webui":
         # 默认使用 operators
