@@ -7,11 +7,14 @@
 #   dataflow env                       查看环境
 #   dataflow webui operators [opts]    启动算子/管线 UI
 #   dataflow webui agent     [opts]    启动 DataFlow-Agent UI（已整合后端）
+#   dataflow pdf2model init/train      PDF to Model 训练流程
+#   dataflow text2model                Text to Model 训练流程
+#   dataflow chat                      聊天界面
 # ===============================================================
 
 import os, argparse, requests, sys
 from colorama import init as color_init, Fore, Style
-from dataflow.cli_funcs import cli_env, cli_init, cli_sft      # 项目已有工具
+from dataflow.cli_funcs import cli_env, cli_init     # 项目已有工具
 from dataflow.version import __version__               # 版本号
 
 color_init(autoreset=True)
@@ -63,6 +66,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # --- env ---
     top.add_parser("env", help="Show environment information")
 
+    # --- chat ---
+    p_chat = top.add_parser("chat", help="Start chat interface with trained model")
+    p_chat.add_argument("--model", default=None, help="Model path (default: use trained model from cache)")
+    p_chat.add_argument("--cache", default="./", help="Cache directory path")
+
+    # --- pdf2model ---
+    p_pdf2model = top.add_parser("pdf2model", help="PDF to model training pipeline")
+    p_pdf2model.add_argument("--cache", default="./", help="Cache directory path")
+    p_pdf2model_sub = p_pdf2model.add_subparsers(dest="pdf2model_action", required=True)
+
+    p_pdf2model_init = p_pdf2model_sub.add_parser("init", help="Initialize PDF to model pipeline")
+
+    p_pdf2model_train = p_pdf2model_sub.add_parser("train", help="Start training after PDF processing")
+    p_pdf2model_train.add_argument("--lf_yaml", default=None, help="LlamaFactory config file (default: {cache}/.cache/train_config.yaml)")
+
+    # --- text2model ---
+    p_text2model = top.add_parser("text2model", help="Train model from JSON/JSONL data")
+    p_text2model.add_argument('input_dir', nargs='?', default='./',
+                             help='Input directory to scan (default: ./)')
+
     # --- webui ---
     p_webui = top.add_parser("webui", help="Launch Gradio WebUI")
     p_webui.add_argument("-H", "--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
@@ -75,8 +98,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     w_sub.add_parser("agent",     help="Launch DataFlow-Agent UI (backend included)")
     w_sub.add_parser("pdf",   help="Launch PDF Knowledge Base Cleaning UI")
 
-    # --- sft (NEW) ---
-    p_sft = top.add_parser("sft", help="PDF to SFT training pipeline")
+    # --- sft (LEGACY) ---
+    p_sft = top.add_parser("sft", help="PDF to SFT training pipeline (legacy)")
     p_sft.add_argument("--pdf_path", default="./pdf", help="PDF input directory path")
     p_sft.add_argument("--lf_yaml", default="train_config.yaml", help="LlamaFactory YAML config file path")
     p_sft.add_argument("--cache", default="./", help="Cache directory path")
@@ -98,10 +121,24 @@ def main() -> None:
 
     elif args.command == "env":
         cli_env()
-    elif args.command == "sft":
-        from dataflow.cli_funcs.cli_sft import cli_sft
-        # SFT 命令处理 - 按照DataFlow风格
-        cli_sft(pdf_path=args.pdf_path, lf_yaml=args.lf_yaml, cache_path=args.cache)
+
+    elif args.command == "pdf2model":
+        if args.pdf2model_action == "init":
+            from dataflow.cli_funcs.cli_sft import cli_pdf2model_init
+            cli_pdf2model_init(cache_path=args.cache)
+        elif args.pdf2model_action == "train":
+            from dataflow.cli_funcs.cli_sft import cli_pdf2model_train
+            # If no lf_yaml specified, use default path relative to cache
+            lf_yaml = args.lf_yaml or f"{args.cache}/.cache/train_config.yaml"
+            cli_pdf2model_train(lf_yaml=lf_yaml, cache_path=args.cache)
+
+    elif args.command == "text2model":
+        from dataflow.cli_funcs.cli_text import cli_text2model
+        cli_text2model(input_dir=args.input_dir)
+
+    elif args.command == "chat":
+        from dataflow.cli_funcs.cli_sft import cli_pdf2model_chat
+        cli_pdf2model_chat(model_path=args.model, cache_path=args.cache)
 
     elif args.command == "webui":
         # 默认使用 operators
@@ -114,7 +151,7 @@ def main() -> None:
                 show_error=args.show_error,
             )
         elif mode == "agent":
-            from dataflow.agent.webui import app  
+            from dataflow.agent.webui import app
             import uvicorn
             uvicorn.run(app, host=args.host, port=args.port, log_level="info")
         elif mode == "pdf":
@@ -122,5 +159,7 @@ def main() -> None:
             kbclean_webui.create_ui().launch()
         else:
             parser.error(f"Unknown ui_mode {mode!r}")
+
+
 if __name__ == "__main__":
     main()

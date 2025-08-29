@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import argparse
 import os
 from pathlib import Path
@@ -54,7 +56,7 @@ class KBCleaning_batchvllm_GPUPipeline():
         self.llm_serving = LocalModelLLMServing_vllm(
             hf_model_name_or_path="Qwen/Qwen2.5-7B-Instruct",
             vllm_max_tokens=2048,
-            vllm_tensor_parallel_size=1,
+            vllm_tensor_parallel_size=8,
             vllm_gpu_memory_utilization=0.6,
             vllm_repetition_penalty=1.2
         )

@@ -40,6 +40,9 @@ class PDFDetector:
 
         pdf_files = []
 
+        # Directories to exclude from scanning
+        exclude_dirs = {'.cache', '__pycache__', '.git', 'node_modules', '.venv', 'venv', '.env'}
+
         if recursive:
             # Recursively search all subdirectories
             pattern = "**/*.pdf"
@@ -48,6 +51,14 @@ class PDFDetector:
             pattern = "*.pdf"
 
         for pdf_path in directory.glob(pattern):
+            # Skip if path contains any excluded directory
+            if any(exclude_dir in pdf_path.parts for exclude_dir in exclude_dirs):
+                continue
+
+            # Also skip hidden directories (starting with .)
+            if any(part.startswith('.') and part != '.' for part in pdf_path.parts):
+                continue
+
             if pdf_path.is_file():
                 # Convert to absolute path
                 pdf_files.append(str(pdf_path.resolve()))
@@ -182,8 +193,10 @@ class PDFDetector:
 
 def main():
     parser = argparse.ArgumentParser(description='Detect PDF files and generate JSONL config file')
-    parser.add_argument('input_dir', nargs='?', default='./input', help='Input directory path to scan (default: ./input)')
-    parser.add_argument('-o', '--output', default='./.cache/gpu/pdf_list.jsonl', help='Output JSONL file path (default: ./.cache/gpu/pdf_list.jsonl)')
+    parser.add_argument('input_dir', nargs='?', default='./input',
+                        help='Input directory path to scan (default: ./input)')
+    parser.add_argument('-o', '--output', default='./.cache/gpu/pdf_list.jsonl',
+                        help='Output JSONL file path (default: ./.cache/gpu/pdf_list.jsonl)')
     parser.add_argument('-r', '--recursive', action='store_true', default=True, help='Scan subdirectories recursively')
     parser.add_argument('--no-recursive', action='store_false', dest='recursive', help='Do not scan subdirectories')
 
