@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DataFlow PDF2Model CLI Module - dataflow/cli_funcs/cli_sft.py
+DataFlow PDF2Model CLI Module - dataflow/cli_funcs/cli_pdf.py
 PDF to Model training pipeline with init/train/chat commands
 """
 
@@ -74,7 +74,7 @@ def copy_customizable_scripts():
     try:
         # 只复制用户可能需要自定义的脚本
         scripts_to_copy = [
-            "Pdf2QAPipeline.py"  # 用户可能需要修改 vLLM/sglang 配置
+            "pdf_to_qa_pipeline.py"  # 用户可能需要修改 vLLM/sglang 配置
         ]
 
         import shutil
@@ -94,7 +94,7 @@ def copy_customizable_scripts():
 
         if copied_files:
             print(f"Successfully copied {len(copied_files)} customizable script(s)")
-            print("You can now modify these files (e.g., switch vLLM/sglang in Pdf2QAPipeline.py)")
+            print("You can now modify these files (e.g., switch vLLM/sglang in pdf_to_qa_pipeline.py)")
             return True
         else:
             print("No customizable scripts were copied")
@@ -114,7 +114,7 @@ def create_train_config_yaml(cache_path="./", model_name_or_path="Qwen/Qwen2.5-7
 
     # 生成时间戳
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_dir_name = f"train_cache_{timestamp}"
+    model_dir_name = f"pdf2model_cache_{timestamp}"  # 改为pdf2model_cache前缀
 
     cache_dir = cache_path_obj / ".cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -122,9 +122,9 @@ def create_train_config_yaml(cache_path="./", model_name_or_path="Qwen/Qwen2.5-7
 
     try:
         # 使用内置的 LlamaFactory.py 获取默认配置
-        llamafactory_script_path = get_dataflow_script_path("LlamaFactory.py")
+        llamafactory_script_path = get_dataflow_script_path("llama_factory_trainer.py")
         if llamafactory_script_path is None:
-            print("Built-in LlamaFactory.py not found")
+            print("Built-in llama_factory_trainer.py not found")
             return None
 
         import importlib.util
@@ -198,9 +198,9 @@ def check_required_files():
     """Check if required built-in scripts exist"""
     # 检查所有需要的内置脚本
     required_scripts = [
-        "path2jsonl_script.py",
-        "merge&filterQApairs.py",
-        "LlamaFactory.py"
+        "path_to_jsonl_script.py",
+        "merge_filter_qa_pairs.py",
+        "llama_factory_trainer.py"
     ]
 
     missing_scripts = []
@@ -218,11 +218,11 @@ def check_required_files():
 
     # 检查用户目录下是否有可自定义的脚本
     current_dir = Path(os.getcwd())
-    customizable_script = current_dir / "Pdf2QAPipeline.py"
+    customizable_script = current_dir / "pdf_to_qa_pipeline.py"
     if customizable_script.exists():
-        print("✅ Found customizable script: Pdf2QAPipeline.py")
+        print("✅ Found customizable script: pdf_to_qa_pipeline.py")
     else:
-        print("❌ Missing customizable script: Pdf2QAPipeline.py")
+        print("❌ Missing customizable script: pdf_to_qa_pipeline.py")
         print("Run 'dataflow pdf2model init' first")
         return False
 
@@ -238,7 +238,7 @@ def cli_pdf2model_init(cache_path: str = "./", model_name: str = "Qwen/Qwen2.5-7
     print("Starting PDF2Model initialization...")
     print(f"Cache directory: {cache_path}")
     print(f"Model: {model_name}")
-    print(f"Output directory: train_cache_<timestamp>")
+    print(f"Output directory: pdf2model_cache_<timestamp>")  # 更新输出目录显示
     print("-" * 60)
 
     if not verify_environment():
@@ -271,12 +271,12 @@ def get_latest_model_dir(cache_path_obj):
     if not saves_dir.exists():
         return None
 
-    # 查找所有 train_cache_ 开头的目录
+    # 查找所有 pdf2model_cache_ 开头的目录
     model_dirs = []
     for dir_path in saves_dir.iterdir():
-        if dir_path.is_dir() and dir_path.name.startswith('train_cache_'):
+        if dir_path.is_dir() and dir_path.name.startswith('pdf2model_cache_'):
             # 检查是否包含正确的时间戳格式 (YYYYMMDD_HHMMSS)
-            timestamp_part = dir_path.name.replace('train_cache_', '')
+            timestamp_part = dir_path.name.replace('pdf2model_cache_', '')
             if len(timestamp_part) == 15 and timestamp_part[8] == '_':
                 date_part = timestamp_part[:8]
                 time_part = timestamp_part[9:]
@@ -322,25 +322,25 @@ def cli_pdf2model_train(lf_yaml: str = ".cache/train_config.yaml", cache_path: s
 
     try:
         # Step 1: PDF Detection - 使用内置脚本
-        script1_path = get_dataflow_script_path("path2jsonl_script.py")
+        script1_path = get_dataflow_script_path("path_to_jsonl_script.py")
         args1 = ["./", "--output", str(cache_path_obj / ".cache" / "gpu" / "pdf_list.jsonl")]
         if not run_script_with_args(script1_path, "Step 1: PDF Detection", args1, cwd=str(current_dir)):
             return False
 
         # Step 2: Data Processing - 使用用户目录下的脚本
-        script2 = current_dir / "Pdf2QAPipeline.py"
+        script2 = current_dir / "pdf_to_qa_pipeline.py"
         args2 = ["--cache", cache_path]
         if not run_script_with_args(script2, "Step 2: Data Processing", args2, cwd=str(current_dir)):
             return False
 
         # Step 3: Data Conversion - 使用内置脚本
-        script3_path = get_dataflow_script_path("merge&filterQApairs.py")
+        script3_path = get_dataflow_script_path("merge_filter_qa_pairs.py")
         args3 = ["--cache", cache_path]
         if not run_script_with_args(script3_path, "Step 3: Data Conversion", args3, cwd=str(current_dir)):
             return False
 
         # Step 4: Training - 使用内置脚本
-        script4_path = get_dataflow_script_path("LlamaFactory.py")
+        script4_path = get_dataflow_script_path("llama_factory_trainer.py")
         args4 = ["--config", str(config_path_obj), "--cache", cache_path]
         if not run_script_with_args(script4_path, "Step 4: Training", args4, cwd=str(current_dir)):
             return False

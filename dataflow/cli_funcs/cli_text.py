@@ -74,7 +74,7 @@ def copy_customizable_scripts():
     try:
         # 只复制用户可能需要自定义的脚本
         scripts_to_copy = [
-            "SFTDataPipeline.py"  # 用户可能需要修改算子配置
+            "sft_data_pipeline.py"  # 用户可能需要修改算子配置
         ]
 
         import shutil
@@ -122,9 +122,9 @@ def create_train_config_yaml(cache_path="./", model_name_or_path="Qwen/Qwen2.5-7
 
     try:
         # 使用内置的 LlamaFactory.py 获取默认配置
-        llamafactory_script_path = get_dataflow_script_path("LlamaFactory.py")
+        llamafactory_script_path = get_dataflow_script_path("llama_factory_trainer.py")
         if llamafactory_script_path is None:
-            print("Built-in LlamaFactory.py not found")
+            print("Built-in llama_factory_trainer.py not found")
             return None
 
         import importlib.util
@@ -194,7 +194,7 @@ def verify_environment():
         missing_deps.append("dataflow")
 
     try:
-        from dataflow.operators.refine import RemoveExtraSpacesRefiner
+        from dataflow.operators.general_text import RemoveExtraSpacesRefiner
         print("✅ DataFlow operators available")
     except ImportError:
         missing_deps.append("dataflow operators")
@@ -211,8 +211,8 @@ def check_required_files_for_training():
     """Check if required built-in scripts exist for training"""
     # 检查所有需要的内置脚本
     required_scripts = [
-        "mergejson&jsonl.py",
-        "LlamaFactory.py"
+        "merge_json_jsonl.py",
+        "llama_factory_trainer.py"
     ]
 
     missing_scripts = []
@@ -230,11 +230,11 @@ def check_required_files_for_training():
 
     # 检查用户目录下是否有可自定义的脚本
     current_dir = Path(os.getcwd())
-    customizable_script = current_dir / "SFTDataPipeline.py"
+    customizable_script = current_dir / "sft_data_pipeline.py"
     if customizable_script.exists():
-        print("✅ Found customizable script: SFTDataPipeline.py")
+        print("✅ Found customizable script: sft_data_pipeline.py")
     else:
-        print("❌ Missing customizable script: SFTDataPipeline.py")
+        print("❌ Missing customizable script: sft_data_pipeline.py")
         print("Run 'dataflow text2model init' first")
         return False
 
@@ -362,7 +362,7 @@ def cli_text2model_train(input_keys: str = None, lf_yaml: str = "./.cache/train_
 
     try:
         # Step 1: Merge JSON/JSONL files - 使用内置脚本
-        script1_path = get_dataflow_script_path("mergejson&jsonl.py")
+        script1_path = get_dataflow_script_path("merge_json_jsonl.py")
         args1 = [str(input_path), "-o", str(cache_path_obj / ".cache" / "pt_input.jsonl")]
         if not run_script_with_args(script1_path, "Step 1: Merging JSON/JSONL files", args1, cwd=str(current_dir)):
             return False
@@ -373,7 +373,7 @@ def cli_text2model_train(input_keys: str = None, lf_yaml: str = "./.cache/train_
         print(f"Data analysis: {data_info}")
 
         # Step 2: Text Processing - 使用用户目录下的脚本
-        script2 = current_dir / "SFTDataPipeline.py"
+        script2 = current_dir / "sft_data_pipeline.py"
         args2 = ["--input", merged_file, "--cache", str(cache_path_obj / ".cache")]
 
         # 添加字段处理参数
@@ -467,7 +467,7 @@ def cli_text2model_train(input_keys: str = None, lf_yaml: str = "./.cache/train_
             return False
 
         # Step 4: Training - 使用内置脚本
-        script4_path = get_dataflow_script_path("LlamaFactory.py")
+        script4_path = get_dataflow_script_path("llama_factory_trainer.py")
         args4 = ["--config", str(config_path_obj)]
         if not run_script_with_args(script4_path, "Step 4: Training", args4, cwd=str(current_dir)):
             return False
