@@ -8,14 +8,14 @@
 #   dataflow webui operators [opts]    启动算子/管线 UI
 #   dataflow webui agent     [opts]    启动 DataFlow-Agent UI（已整合后端）
 #   dataflow pdf2model init/train      PDF to Model 训练流程
-#   dataflow text2model                Text to Model 训练流程
+#   dataflow text2model init/train     Text to Model 训练流程
 #   dataflow chat                      聊天界面
 # ===============================================================
 
 import os, argparse, requests, sys
 from colorama import init as color_init, Fore, Style
-from dataflow.cli_funcs import cli_env, cli_init     # 项目已有工具
-from dataflow.version import __version__               # 版本号
+from dataflow.cli_funcs import cli_env, cli_init  # 项目已有工具
+from dataflow.version import __version__  # 版本号
 
 color_init(autoreset=True)
 PYPI_API_URL = "https://pypi.org/pypi/open-dataflow/json"
@@ -36,7 +36,7 @@ def version_and_check_for_updates() -> None:
         print(f"\tPyPI  version : {remote}")
         if remote != __version__:
             print(Fore.YELLOW + f"New version available: {remote}."
-                  "  Run 'pip install -U open-dataflow' to upgrade."
+                                "  Run 'pip install -U open-dataflow' to upgrade."
                   + Style.RESET_ALL)
         else:
             print(Fore.GREEN + f"You are using the latest version: {__version__}" + Style.RESET_ALL)
@@ -60,7 +60,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # --- init ---
     p_init = top.add_parser("init", help="Initialize scripts/configs in current dir")
     p_init_sub = p_init.add_subparsers(dest="subcommand", required=False)
-    p_init_sub.add_parser("all",       help="Init all components").set_defaults(subcommand="all")
+    p_init_sub.add_parser("all", help="Init all components").set_defaults(subcommand="all")
     p_init_sub.add_parser("reasoning", help="Init reasoning components").set_defaults(subcommand="reasoning")
 
     # --- env ---
@@ -79,12 +79,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_pdf2model_init = p_pdf2model_sub.add_parser("init", help="Initialize PDF to model pipeline")
 
     p_pdf2model_train = p_pdf2model_sub.add_parser("train", help="Start training after PDF processing")
-    p_pdf2model_train.add_argument("--lf_yaml", default=None, help="LlamaFactory config file (default: {cache}/.cache/train_config.yaml)")
+    p_pdf2model_train.add_argument("--lf_yaml", default=None,
+                                   help="LlamaFactory config file (default: {cache}/.cache/train_config.yaml)")
 
     # --- text2model ---
     p_text2model = top.add_parser("text2model", help="Train model from JSON/JSONL data")
-    p_text2model.add_argument('input_dir', nargs='?', default='./',
-                             help='Input directory to scan (default: ./)')
+    p_text2model_sub = p_text2model.add_subparsers(dest="text2model_action", required=True)
+
+    p_text2model_init = p_text2model_sub.add_parser("init", help="Initialize text2model pipeline")
+    p_text2model_init.add_argument("--cache", default="./", help="Cache directory path")
+
+    p_text2model_train = p_text2model_sub.add_parser("train", help="Start training after text processing")
+    p_text2model_train.add_argument('input_dir', nargs='?', default='./',
+                                    help='Input directory to scan (default: ./)')
+    p_text2model_train.add_argument('--input-keys', default=None,
+                                    help='Fields to process (default: text)')
+    p_text2model_train.add_argument("--lf_yaml", default=None,
+                                    help="LlamaFactory config file (default: {cache}/.cache/train_config.yaml)")
 
     # --- webui ---
     p_webui = top.add_parser("webui", help="Launch Gradio WebUI")
@@ -95,8 +106,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     #    webui 二级子命令：operators / agent
     w_sub = p_webui.add_subparsers(dest="ui_mode", required=False)
     w_sub.add_parser("operators", help="Launch operator / pipeline UI")
-    w_sub.add_parser("agent",     help="Launch DataFlow-Agent UI (backend included)")
-    w_sub.add_parser("pdf",   help="Launch PDF Knowledge Base Cleaning UI")
+    w_sub.add_parser("agent", help="Launch DataFlow-Agent UI (backend included)")
+    w_sub.add_parser("pdf", help="Launch PDF Knowledge Base Cleaning UI")
 
     # --- sft (LEGACY) ---
     p_sft = top.add_parser("sft", help="PDF to SFT training pipeline (legacy)")
@@ -133,8 +144,14 @@ def main() -> None:
             cli_pdf2model_train(lf_yaml=lf_yaml, cache_path=args.cache)
 
     elif args.command == "text2model":
-        from dataflow.cli_funcs.cli_text import cli_text2model
-        cli_text2model(input_dir=args.input_dir)
+        from dataflow.cli_funcs.cli_text import cli_text2model_init, cli_text2model_train
+
+        if args.text2model_action == "init":
+            cli_text2model_init(cache_path=getattr(args, 'cache', './'))
+        elif args.text2model_action == "train":
+            # 如果没有指定lf_yaml，使用默认路径
+            lf_yaml = getattr(args, 'lf_yaml', None) or "./.cache/train_config.yaml"
+            cli_text2model_train(input_keys=getattr(args, 'input_keys', None), lf_yaml=lf_yaml)
 
     elif args.command == "chat":
         from dataflow.cli_funcs.cli_sft import cli_pdf2model_chat
