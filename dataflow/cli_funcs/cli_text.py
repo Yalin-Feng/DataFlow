@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 DataFlow Text Processing CLI Module - dataflow/cli_funcs/cli_text.py
-Text data processing pipeline with complete workflow
+Text data processing pipeline with complete workflow including Text2QA
 """
 
 import subprocess
@@ -67,41 +67,54 @@ def get_dataflow_script_path(script_name: str) -> Path:
 
 def copy_customizable_scripts():
     """Copy scripts that users might want to customize"""
-    print("Step 0: Copying customizable pipeline scripts...")
+    print("Step 0: Setting up customizable pipeline scripts...")
 
     current_dir = Path(os.getcwd())
-
-    try:
-        # 只复制用户可能需要自定义的脚本
-        scripts_to_copy = [
-            "sft_data_pipeline.py"  # 用户可能需要修改算子配置
-        ]
-
-        import shutil
-        copied_files = []
-
-        for script_name in scripts_to_copy:
-            source_path = get_dataflow_script_path(script_name)
-            if source_path is None:
-                print(f"Warning: Template not found: {script_name}")
-                continue
-
-            target_file = current_dir / script_name
-
-            shutil.copy2(source_path, target_file)
-            copied_files.append(script_name)
-            print(f"Copied: {script_name}")
-
-        if copied_files:
-            print(f"Successfully copied {len(copied_files)} customizable script(s)")
-            print("You can now modify these files (e.g., adjust operators in SFTDataPipeline.py)")
-            return True
+    
+    # 检查当前目录下是否已经存在所需的脚本文件
+    required_scripts = [
+        "text_to_qa_pipeline.py",
+        "merge_filter_qa_pairs.py",
+    ]
+    
+    existing_scripts = []
+    missing_scripts = []
+    
+    for script_name in required_scripts:
+        script_path = current_dir / script_name
+        if script_path.exists():
+            existing_scripts.append(script_name)
+            print(f"Found existing: {script_name}")
         else:
-            print("No customizable scripts were copied")
-            return False
-
-    except Exception as e:
-        print(f"Failed to copy scripts: {e}")
+            missing_scripts.append(script_name)
+    
+    # 尝试从模板复制缺失的脚本
+    copied_files = []
+    for script_name in missing_scripts:
+        source_path = get_dataflow_script_path(script_name)
+        if source_path is not None:
+            try:
+                import shutil
+                target_file = current_dir / script_name
+                shutil.copy2(source_path, target_file)
+                copied_files.append(script_name)
+                print(f"Copied from template: {script_name}")
+            except Exception as e:
+                print(f"Warning: Failed to copy {script_name}: {e}")
+        else:
+            print(f"Warning: Template not found for {script_name}")
+    
+    total_available = len(existing_scripts) + len(copied_files)
+    
+    if total_available > 0:
+        print(f"Setup completed: {total_available} scripts available")
+        if existing_scripts:
+            print(f"  Existing scripts: {', '.join(existing_scripts)}")
+        if copied_files:
+            print(f"  Copied from templates: {', '.join(copied_files)}")
+        return True
+    else:
+        print("Warning: No pipeline scripts available")
         return False
 
 
@@ -194,7 +207,8 @@ def verify_environment():
         missing_deps.append("dataflow")
 
     try:
-        from dataflow.operators.general_text import RemoveExtraSpacesRefiner
+        # 修复: 使用正确的算子导入路径
+        from dataflow.operators.knowledge_cleaning import CorpusTextSplitterBatch, KnowledgeCleanerBatch
         print("✅ DataFlow operators available")
     except ImportError:
         missing_deps.append("dataflow operators")
@@ -230,11 +244,21 @@ def check_required_files_for_training():
 
     # 检查用户目录下是否有可自定义的脚本
     current_dir = Path(os.getcwd())
-    customizable_script = current_dir / "sft_data_pipeline.py"
-    if customizable_script.exists():
-        print("✅ Found customizable script: sft_data_pipeline.py")
-    else:
-        print("❌ Missing customizable script: sft_data_pipeline.py")
+    customizable_scripts = [
+        "text_to_qa_pipeline.py",
+        "merge_filter_qa_pairs.py"
+    ]
+
+    missing_customizable = []
+    for script_name in customizable_scripts:
+        script_path = current_dir / script_name
+        if script_path.exists():
+            print(f"✅ Found customizable script: {script_name}")
+        else:
+            missing_customizable.append(script_name)
+
+    if missing_customizable:
+        print(f"❌ Missing customizable scripts: {', '.join(missing_customizable)}")
         print("Run 'dataflow text2model init' first")
         return False
 
@@ -254,6 +278,7 @@ def analyze_input_data(input_file: str) -> dict:
                 return {
                     'available_keys': list(sample_data.keys()),
                     'has_sft_format': all(key in sample_data for key in ['instruction', 'input', 'output']),
+                    'has_text_field': 'text' in sample_data,
                     'has_raw_content': 'raw_content' in sample_data
                 }
     except Exception as e:
@@ -291,22 +316,23 @@ def get_latest_model_dir(cache_path_obj):
 def cli_text2model_init(cache_path: str = "./") -> bool:
     """
     Text2Model initialization:
-    0. Copy only customizable scripts to current directory
+    0. Check for existing scripts and copy any missing templates
     1. Create train_config.yaml in .cache directory
     """
     print("Starting Text2Model initialization...")
     print(f"Cache directory: {cache_path}")
     print(f"Model: Qwen/Qwen2.5-7B-Instruct (default)")
     print(f"Output directory: text2model_cache_<timestamp>")
+    print("Workflow: Text2QA generation and training")
     print("-" * 60)
 
     if not verify_environment():
         return False
 
     try:
-        # Step 0: Copy only customizable scripts
+        # Step 0: Check for existing scripts and setup missing ones
         if not copy_customizable_scripts():
-            return False
+            print("Warning: Some scripts may be missing, but continuing...")
 
         # Step 1: Create training configuration
         print("Step 1: Creating training configuration...")
@@ -314,6 +340,10 @@ def cli_text2model_init(cache_path: str = "./") -> bool:
 
         if config_file:
             print("Text2Model initialization completed!")
+            print("\nWorkflow:")
+            print("1. Put your JSON/JSONL files with 'text' field in current directory")
+            print("2. Run: dataflow text2model train")
+            print("   This will automatically run Text2QA generation and training")
             return True
         else:
             print("Failed to create training configuration")
@@ -326,7 +356,7 @@ def cli_text2model_init(cache_path: str = "./") -> bool:
 
 def cli_text2model_train(input_keys: str = None, lf_yaml: str = "./.cache/train_config.yaml") -> bool:
     """
-    Start Text2Model training using mix of built-in and user scripts
+    Start Text2Model training using complete pipeline
     """
     print("Starting Text2Model training...")
     if input_keys:
@@ -338,9 +368,6 @@ def cli_text2model_train(input_keys: str = None, lf_yaml: str = "./.cache/train_
         config_path_obj = current_dir / config_path_obj
 
     if not verify_environment():
-        return False
-
-    if not check_required_files_for_training():
         return False
 
     if not config_path_obj.exists():
@@ -361,136 +388,180 @@ def cli_text2model_train(input_keys: str = None, lf_yaml: str = "./.cache/train_
     print("-" * 60)
 
     try:
-        # Step 1: Merge JSON/JSONL files - 使用内置脚本
+        # Step 1: Merge JSON/JSONL files to create text_input.jsonl
+        print(f"{Fore.CYAN}Step 1: Merging JSON/JSONL files...{Style.RESET_ALL}")
+        
+        # 调用 merge_json_jsonl.py 的逻辑
         script1_path = get_dataflow_script_path("merge_json_jsonl.py")
-        args1 = [str(input_path), "-o", str(cache_path_obj / ".cache" / "pt_input.jsonl")]
-        if not run_script_with_args(script1_path, "Step 1: Merging JSON/JSONL files", args1, cwd=str(current_dir)):
+        args1 = [str(input_path), "--cache", str(cache_path_obj)]
+        if not run_script_with_args(script1_path, "JSON/JSONL merging", args1, cwd=str(current_dir)):
+            print(f"{Fore.RED}❌ Step 1: JSON/JSONL merging failed{Style.RESET_ALL}")
             return False
-
-        # 分析合并后的数据
-        merged_file = str(cache_path_obj / ".cache" / "pt_input.jsonl")
-        data_info = analyze_input_data(merged_file)
-        print(f"Data analysis: {data_info}")
-
-        # Step 2: Text Processing - 使用用户目录下的脚本
-        script2 = current_dir / "sft_data_pipeline.py"
-        args2 = ["--input", merged_file, "--cache", str(cache_path_obj / ".cache")]
-
-        # 添加字段处理参数
-        if input_keys:
-            args2.extend(["--input-keys", input_keys])
-        else:
-            # 根据数据分析结果提供默认建议
-            if data_info.get('has_sft_format', False):
-                suggested_keys = "['instruction','input','output']"
-                print(f"Detected SFT format data, using: {suggested_keys}")
-                args2.extend(["--input-keys", suggested_keys])
-            elif not data_info.get('has_raw_content', False) and data_info.get('available_keys'):
-                # 如果没有raw_content但有其他字段，使用第一个可用字段
-                first_key = data_info['available_keys'][0]
-                print(f"Using available field: {first_key}")
-                args2.extend(["--input-keys", first_key])
-
-        if not run_script_with_args(script2, "Step 2: Text Processing", args2, cwd=str(current_dir)):
+        
+        # 验证 text_input.jsonl 是否创建成功
+        text_input_file = cache_path_obj / ".cache" / "gpu" / "text_input.jsonl"
+        if not text_input_file.exists():
+            print(f"{Fore.RED}❌ text_input.jsonl not created. Check if you have JSON/JSONL files in {input_path}{Style.RESET_ALL}")
             return False
+        
+        file_size = text_input_file.stat().st_size
+        print(f"{Fore.GREEN}✅ Step 1 completed: {text_input_file} ({file_size} bytes){Style.RESET_ALL}")
 
-        # Step 3: Data Conversion - 创建LlamaFactory格式的数据
-        print(f"\n{Fore.BLUE}Step 3: Converting to LlamaFactory format{Style.RESET_ALL}")
-
-        # 查找处理后的数据文件
-        processed_files = list(cache_path_obj.glob(".cache/gpu/sft_dataflow_cache_step_*.jsonl"))
-        if not processed_files:
-            print("No processed data files found")
+        # Step 2: Text2QA Pipeline
+        print(f"{Fore.CYAN}Step 2: Text2QA generation...{Style.RESET_ALL}")
+        
+        script2_path = get_dataflow_script_path("text_to_qa_pipeline.py")
+        args2 = ["--cache", str(cache_path_obj)]
+        if not run_script_with_args(script2_path, "Text2QA generation", args2, cwd=str(current_dir)):
+            print(f"{Fore.RED}❌ Step 2: Text2QA generation failed{Style.RESET_ALL}")
             return False
+        
+        # 验证 Text2QA 输出
+        qa_output_file = cache_path_obj / ".cache" / "gpu" / "text2qa_step_step3.json"
+        if not qa_output_file.exists():
+            print(f"{Fore.RED}❌ Text2QA output not found{Style.RESET_ALL}")
+            return False
+        
+        file_size = qa_output_file.stat().st_size
+        print(f"{Fore.GREEN}✅ Step 2 completed: {qa_output_file} ({file_size} bytes){Style.RESET_ALL}")
 
-        # 使用最新的处理文件
-        latest_processed = max(processed_files, key=lambda x: x.stat().st_mtime)
-        print(f"Using processed file: {latest_processed}")
-
-        # 创建LlamaFactory数据目录和文件
-        data_dir = cache_path_obj / ".cache" / "data"
-        data_dir.mkdir(parents=True, exist_ok=True)
-
-        qa_file = data_dir / "qa.json"
-        dataset_info_file = data_dir / "dataset_info.json"
-
-        # 转换数据格式
-        converted_data = []
+        # Step 3: Convert to training format
+        print(f"{Fore.CYAN}Step 3: Converting to training format...{Style.RESET_ALL}")
+        
+        script3_path = get_dataflow_script_path("merge_filter_qa_pairs.py")
+        args3 = ["--cache", str(cache_path_obj)]
+        if not run_script_with_args(script3_path, "QA format conversion", args3, cwd=str(current_dir)):
+            print(f"{Fore.RED}❌ Step 3: QA format conversion failed{Style.RESET_ALL}")
+            return False
+        
+        # 验证训练数据
+        qa_file = cache_path_obj / ".cache" / "data" / "qa.json"
+        dataset_info_file = cache_path_obj / ".cache" / "data" / "dataset_info.json"
+        
+        if not qa_file.exists() or not dataset_info_file.exists():
+            print(f"{Fore.RED}❌ Training data files not created{Style.RESET_ALL}")
+            return False
+        
+        # 统计样本数
         try:
-            with open(latest_processed, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        item = json.loads(line)
-                        # 检查是否为SFT格式
-                        if 'instruction' in item and 'output' in item:
-                            converted_data.append({
-                                "instruction": item.get('instruction', ''),
-                                "input": item.get('input', ''),
-                                "output": item.get('output', '')
-                            })
-                        elif 'raw_content' in item:
-                            # 如果是raw_content格式，创建简单的指令对
-                            content = item['raw_content'][:500] + "..." if len(item['raw_content']) > 500 else item['raw_content']
-                            converted_data.append({
-                                "instruction": "Please analyze the following text and provide insights:",
-                                "input": content,
-                                "output": "This text contains information that can be analyzed for various purposes."
-                            })
-
-            # 保存qa.json
-            with open(qa_file, 'w', encoding='utf-8') as f:
-                json.dump(converted_data, f, ensure_ascii=False, indent=2)
-
-            # 创建dataset_info.json
-            dataset_info = {
-                "kb_qa": {
-                    "file_name": "qa.json",
-                    "columns": {
-                        "prompt": "instruction",
-                        "query": "input",
-                        "response": "output"
-                    }
-                }
-            }
-
-            with open(dataset_info_file, 'w', encoding='utf-8') as f:
-                json.dump(dataset_info, f, ensure_ascii=False, indent=2)
-
-            print(f"Converted {len(converted_data)} training samples")
-            print(f"Created: {qa_file}")
-            print(f"Created: {dataset_info_file}")
+            import json
+            with open(qa_file, 'r', encoding='utf-8') as f:
+                qa_data = json.load(f)
+            sample_count = len(qa_data)
+            file_size = qa_file.stat().st_size
+            print(f"{Fore.GREEN}✅ Step 3 completed: {sample_count} training samples ({file_size} bytes){Style.RESET_ALL}")
+        except:
             print(f"{Fore.GREEN}✅ Step 3 completed{Style.RESET_ALL}")
 
-        except Exception as e:
-            print(f"Data conversion failed: {e}")
-            return False
-
-        # Step 4: Training - 使用内置脚本
+        # Step 4: Training
+        print(f"{Fore.CYAN}Step 4: Starting model training...{Style.RESET_ALL}")
+        
         script4_path = get_dataflow_script_path("llama_factory_trainer.py")
-        args4 = ["--config", str(config_path_obj)]
-        if not run_script_with_args(script4_path, "Step 4: Training", args4, cwd=str(current_dir)):
+        args4 = ["--config", str(config_path_obj), "--cache", str(cache_path_obj)]
+        if not run_script_with_args(script4_path, "Model training", args4, cwd=str(current_dir)):
+            print(f"{Fore.RED}❌ Step 4: Training failed{Style.RESET_ALL}")
             return False
 
-        # 显示训练完成信息，从配置文件中读取实际的输出目录
-        try:
-            import yaml
-            with open(config_path_obj, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-                actual_output_dir = config.get('output_dir', 'unknown')
-        except:
-            actual_output_dir = 'unknown'
-
-        print("Training completed successfully!")
-        print(f"Model saved to: {actual_output_dir}")
-        print("Next steps:")
-        print("Test the trained model with 'dataflow chat'")
-
+        print(f"{Fore.GREEN}✅ Text2Model training completed successfully!{Style.RESET_ALL}")
+        print(f"Next steps:")
+        print(f"  Test the model: dataflow chat")
+        
         return True
 
     except Exception as e:
         print(f"Training error: {e}")
         return False
+
+
+def _run_text2qa_workflow(current_dir: Path, cache_path_obj: Path, config_path_obj: Path) -> bool:
+    """Run Text2QA workflow"""
+
+    # Step 1: Check if Text2QA output exists
+    text2qa_output = cache_path_obj / ".cache" / "gpu" / "text2qa_step_step3.json"
+
+    if not text2qa_output.exists():
+        print("Text2QA output not found. Please run text_to_qa_pipeline.py first.")
+        print("Example:")
+        print("  1. Prepare JSON/JSONL files with 'text' field in current directory")
+        print("  2. Run: python text_to_qa_pipeline.py")
+        print("  3. Then run: dataflow text2model train --text2qa")
+        return False
+
+    print("Found Text2QA output, proceeding with conversion...")
+
+    # Step 2: Convert QA to Alpaca format
+    script2 = current_dir / "merge_filter_qa_pairs.py"
+    args2 = ["--cache", str(cache_path_obj)]
+
+    if not run_script_with_args(script2, "Step 2: Converting QA to Alpaca format", args2, cwd=str(current_dir)):
+        return False
+
+    # Step 3: Training
+    script3_path = get_dataflow_script_path("llama_factory_trainer.py")
+    args3 = ["--config", str(config_path_obj)]
+    if not run_script_with_args(script3_path, "Step 3: Training", args3, cwd=str(current_dir)):
+        return False
+
+    # 显示训练完成信息
+    try:
+        import yaml
+        with open(config_path_obj, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+            actual_output_dir = config.get('output_dir', 'unknown')
+    except:
+        actual_output_dir = 'unknown'
+
+    print("Text2QA training completed successfully!")
+    print(f"Model saved to: {actual_output_dir}")
+    print("Next steps:")
+    print("Test the trained model with 'dataflow chat'")
+    return True
+
+
+def _run_normal_text_workflow(input_path: Path, current_dir: Path, cache_path_obj: Path, config_path_obj: Path,
+                              input_keys: str) -> bool:
+    """Run Text2QA workflow as the main processing pipeline"""
+
+    # Step 1: Merge JSON/JSONL files and create text_input.jsonl - 使用内置脚本
+    script1_path = get_dataflow_script_path("merge_json_jsonl.py")
+    args1 = [str(input_path), "--cache", str(cache_path_obj)]
+    if not run_script_with_args(script1_path, "Step 1: Preparing text input for Text2QA", args1, cwd=str(current_dir)):
+        return False
+
+    # Step 2: Run Text2QA Pipeline - 使用用户目录下的脚本
+    script2 = current_dir / "text_to_qa_pipeline.py"
+    args2 = ["--cache", str(cache_path_obj)]
+    
+    if not run_script_with_args(script2, "Step 2: Text2QA generation", args2, cwd=str(current_dir)):
+        return False
+
+    # Step 3: Convert QA to Alpaca format - 使用用户目录下的脚本
+    script3 = current_dir / "merge_filter_qa_pairs.py"
+    args3 = ["--cache", str(cache_path_obj)]
+    
+    if not run_script_with_args(script3, "Step 3: Converting QA to training format", args3, cwd=str(current_dir)):
+        return False
+
+    # Step 4: Training - 使用内置脚本
+    script4_path = get_dataflow_script_path("llama_factory_trainer.py")
+    args4 = ["--config", str(config_path_obj)]
+    if not run_script_with_args(script4_path, "Step 4: Training", args4, cwd=str(current_dir)):
+        return False
+
+    # 显示训练完成信息，从配置文件中读取实际的输出目录
+    try:
+        import yaml
+        with open(config_path_obj, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+            actual_output_dir = config.get('output_dir', 'unknown')
+    except:
+        actual_output_dir = 'unknown'
+
+    print("Text2QA training completed successfully!")
+    print(f"Model saved to: {actual_output_dir}")
+    print("Next steps:")
+    print("Test the trained model with 'dataflow chat'")
+    return True
 
 
 def cli_text2model_chat(model_path=None):
@@ -566,52 +637,3 @@ def cli_text2model_chat(model_path=None):
     except KeyboardInterrupt:
         print("\n\nChat session ended by user")
         return True
-
-
-def cli_text_check(output_file: str = "./.cache/sft_dataflow_cache_step_step13.jsonl") -> bool:
-    """Check processing results"""
-    print("Checking text processing results...")
-
-    current_dir = Path(os.getcwd())
-    output_path = current_dir / output_file
-
-    if not output_path.exists():
-        print(f"Output file not found: {output_path}")
-        print("Run 'dataflow text2model train' first")
-        return False
-
-    try:
-        line_count = 0
-        sample_lines = []
-
-        with open(output_path, 'r', encoding='utf-8') as f:
-            for i, line in enumerate(f):
-                if line.strip():
-                    line_count += 1
-                    if i < 3:  # Get first 3 samples
-                        try:
-                            data = json.loads(line)
-                            sample_lines.append(data)
-                        except:
-                            pass
-
-        print(f"✅ Processing completed successfully!")
-        print(f"Total processed entries: {line_count}")
-        print(f"Output file: {output_path}")
-
-        if sample_lines:
-            print("\nSample entries:")
-            for i, sample in enumerate(sample_lines, 1):
-                keys = list(sample.keys())
-                print(f"  {i}. Keys: {keys}")
-                for key in ['instruction', 'input', 'output', 'raw_content']:
-                    if key in sample:
-                        content = str(sample[key])
-                        preview = content[:100] + "..." if len(content) > 100 else content
-                        print(f"     {key}: {preview}")
-
-        return True
-
-    except Exception as e:
-        print(f"Error checking results: {e}")
-        return False

@@ -1,288 +1,367 @@
 #!/usr/bin/env python3
-"""
-JSON & JSONL Merger - mergejson&jsonl.py
-将多个 JSON/JSONL/Parquet 文件聚合成单个 pt_input.jsonl 文件供 DataFlow 处理
-支持保持原始字段结构
-"""
-
-import os
 import json
+import os
 import argparse
 from pathlib import Path
-from typing import List, Union, Dict, Any
 
 
-class TextDataAggregator:
-    """文本数据聚合器"""
-
-    def __init__(self, output_file: str = "./.cache/pt_input.jsonl"):
-        # 处理输出路径
-        output_path = Path(output_file)
-        if not output_path.is_absolute():
-            caller_cwd = Path(os.getcwd())
-            output_file = str(caller_cwd / output_file)
-        self.output_file = output_file
-        self.input_files = []
-        self.supported_formats = {'.json', '.jsonl', '.parquet'}
-
-    def scan_directory(self, directory: Union[str, Path], recursive: bool = True) -> List[str]:
-        """扫描目录中的支持格式文件"""
-        directory = Path(directory)
-
-        if not directory.exists():
-            print(f"错误：目录 '{directory}' 不存在")
-            return []
-
-        if not directory.is_dir():
-            print(f"错误：'{directory}' 不是有效目录")
-            return []
-
-        found_files = []
-
-        # 排除的目录
-        exclude_dirs = {'.cache', '__pycache__', '.git', 'node_modules', '.venv', 'venv', '.env', 'cache'}
-
-        if recursive:
-            patterns = ["**/*.*"]
-        else:
-            patterns = ["*.*"]
-
-        for pattern in patterns:
-            for file_path in directory.glob(pattern):
-                # 跳过排除目录
-                if any(exclude_dir in file_path.parts for exclude_dir in exclude_dirs):
-                    continue
-
-                # 跳过隐藏目录
-                if any(part.startswith('.') and part != '.' for part in file_path.parts):
-                    continue
-
-                # 检查支持的格式
-                if file_path.suffix.lower() in self.supported_formats and file_path.is_file():
-                    found_files.append(str(file_path.resolve()))
-                    print(f"找到文件: {file_path}")
-
-        self.input_files.extend(found_files)
-        return found_files
-
-    def extract_data_from_json(self, data: Any, text_keys: List[str]) -> List[Dict]:
-        """从JSON数据中提取数据，保持原始结构"""
-        results = []
-
-        if isinstance(data, dict):
-            # 过滤掉空值字段，保持原始结构
-            filtered_data = {}
-            for key, value in data.items():
-                if isinstance(value, str) and value.strip():
-                    filtered_data[key] = value.strip()
-                elif not isinstance(value, str) and value is not None:
-                    filtered_data[key] = value
-
-            if filtered_data:  # 只有非空数据才添加
-                results.append(filtered_data)
-
-        elif isinstance(data, list):
-            for item in data:
-                results.extend(self.extract_data_from_json(item, text_keys))
-
-        return results
-
-    def process_json_file(self, file_path: str, text_keys: List[str]) -> List[Dict]:
-        """处理JSON文件"""
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            return self.extract_data_from_json(data, text_keys)
-        except Exception as e:
-            print(f"处理JSON文件 {file_path} 时出错: {e}")
-            return []
-
-    def process_jsonl_file(self, file_path: str, text_keys: List[str]) -> List[Dict]:
-        """处理JSONL文件"""
-        results = []
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+def extract_text_from_json(json_file_path):
+    """从JSON/JSONL文件中提取文本内容"""
+    try:
+        with open(json_file_path, 'r', encoding='utf-8') as f:
+            if json_file_path.suffix == '.jsonl':
+                # 处理JSONL文件（每行一个JSON对象）
+                texts = []
                 for line_num, line in enumerate(f, 1):
                     line = line.strip()
-                    if line:
-                        try:
-                            data = json.loads(line)
-                            results.extend(self.extract_data_from_json(data, text_keys))
-                        except json.JSONDecodeError as e:
-                            print(f"跳过 {file_path} 第{line_num}行（JSON解析错误）: {e}")
-                            continue
-            return results
-        except Exception as e:
-            print(f"处理JSONL文件 {file_path} 时出错: {e}")
-            return []
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        text_content = extract_text_from_data(data)
+                        if text_content:
+                            texts.append(text_content)
+                    except json.JSONDecodeError as e:
+                        print(f"  ⚠️  Warning: Invalid JSON at line {line_num} in {json_file_path}: {e}")
+                        continue
+                return texts
+            else:
+                # 处理标准JSON文件
+                data = json.load(f)
+                text_content = extract_text_from_data(data)
+                return [text_content] if text_content else []
+                
+    except Exception as e:
+        print(f"  ❌ Error reading {json_file_path}: {e}")
+        return []
 
-    def process_parquet_file(self, file_path: str, text_keys: List[str]) -> List[Dict]:
-        """处理Parquet文件"""
-        try:
-            import pandas as pd
-            df = pd.read_parquet(file_path)
 
-            results = []
-            # 保持原始结构：转换整个DataFrame
-            for _, row in df.iterrows():
-                row_dict = {}
-                for col in df.columns:
-                    if pd.notna(row[col]) and str(row[col]).strip():
-                        if isinstance(row[col], str):
-                            row_dict[col] = row[col].strip()
-                        else:
-                            row_dict[col] = row[col]
+def extract_text_from_data(data):
+    """从JSON数据中提取文本内容，确保返回tokenizer友好的格式"""
+    text_fields = ['text', 'content', 'body', 'raw_text', 'message', 'description', 'summary']
+    
+    def clean_text(text):
+        """清理文本，确保tokenizer兼容"""
+        if not isinstance(text, str):
+            return None
+        
+        # 移除或替换问题字符
+        text = text.replace('\x00', '')  # 移除null字符
+        text = text.replace('\ufeff', '')  # 移除BOM
+        text = text.replace('\r\n', '\n')  # 统一换行符
+        text = text.replace('\r', '\n')
+        
+        # 移除控制字符（保留常见的换行、制表符）
+        import re
+        text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+        
+        # 确保文本不为空
+        text = text.strip()
+        if not text:
+            return None
+            
+        # 限制文本长度（防止过长文本导致问题）
+        max_length = 50000  # 50K字符限制
+        if len(text) > max_length:
+            print(f"  ⚠️  Warning: Text too long ({len(text)} chars), truncating to {max_length}")
+            text = text[:max_length]
+        
+        return text
+    
+    if isinstance(data, dict):
+        # 查找文本字段
+        for field in text_fields:
+            if field in data and data[field]:
+                content = data[field]
+                if isinstance(content, str):
+                    cleaned = clean_text(content)
+                    if cleaned:
+                        return cleaned
+                elif isinstance(content, (list, dict)):
+                    # 递归处理嵌套结构
+                    nested_text = extract_text_from_data(content)
+                    if nested_text:
+                        return clean_text(nested_text)
+        
+        # 如果没找到标准字段，尝试查找所有字符串值
+        for key, value in data.items():
+            if isinstance(value, str) and len(value.strip()) > 50:
+                cleaned = clean_text(value)
+                if cleaned:
+                    return cleaned
+                    
+    elif isinstance(data, list):
+        # 如果是列表，处理每个元素
+        texts = []
+        for item in data:
+            if isinstance(item, dict):
+                text_content = extract_text_from_data(item)
+                if text_content:
+                    texts.append(text_content)
+            elif isinstance(item, str):
+                cleaned = clean_text(item)
+                if cleaned:
+                    texts.append(cleaned)
+        
+        if texts:
+            combined = "\n\n".join(texts)
+            return clean_text(combined)
+            
+    elif isinstance(data, str):
+        return clean_text(data)
+    
+    return None
 
-                if row_dict:  # 只添加非空行
-                    results.append(row_dict)
 
-            return results
-        except ImportError:
-            print(f"需要安装 pandas 来处理 Parquet 文件: pip install pandas pyarrow")
-            return []
-        except Exception as e:
-            print(f"处理Parquet文件 {file_path} 时出错: {e}")
-            return []
+def create_text_files(json_files, cache_path_obj):
+    """将JSON文件中的文本内容转换为独立的文本文件，确保格式正确"""
+    temp_dir = cache_path_obj / ".cache" / "gpu" / "temp_texts"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    text_paths = []
+    processed_count = 0
+    
+    print("\nExtracting text content from JSON files...")
+    print("-" * 50)
+    
+    for i, json_file in enumerate(json_files):
+        print(f"Processing: {json_file.name}")
+        
+        # 提取文本内容
+        text_contents = extract_text_from_json(json_file)
+        
+        if not text_contents:
+            print(f"  ⚠️  No valid text content found in {json_file}")
+            continue
+        
+        # 为每个文本内容创建文件
+        for j, text_content in enumerate(text_contents):
+            if not text_content or not isinstance(text_content, str) or not text_content.strip():
+                continue
+            
+            # 最终验证和清理文本
+            final_text = validate_and_clean_text(text_content)
+            if not final_text:
+                print(f"  ⚠️  Text content failed validation")
+                continue
+                
+            # 创建文本文件名
+            base_name = json_file.stem
+            if len(text_contents) > 1:
+                temp_file = temp_dir / f"{base_name}_{j}.txt"
+            else:
+                temp_file = temp_dir / f"{base_name}.txt"
+            
+            try:
+                with open(temp_file, 'w', encoding='utf-8') as tf:
+                    tf.write(final_text)
+                
+                # 验证写入的文件
+                if verify_text_file(temp_file):
+                    text_paths.append(str(temp_file))
+                    processed_count += 1
+                    print(f"  ✅ Created: {temp_file.name} ({len(final_text)} chars)")
+                else:
+                    print(f"  ❌ Failed validation: {temp_file.name}")
+                    temp_file.unlink()  # 删除无效文件
+                    
+            except Exception as e:
+                print(f"  ❌ Error creating {temp_file}: {e}")
+    
+    print(f"\n✅ Successfully processed {processed_count} text contents from {len(json_files)} JSON files")
+    return text_paths
 
-    def validate_text_length(self, item: Dict, min_length: int) -> bool:
-        """验证数据项的文本长度"""
-        # 检查所有字符串字段的总长度
-        total_length = 0
-        for value in item.values():
-            if isinstance(value, str):
-                total_length += len(value.strip())
-        return total_length >= min_length
 
-    def aggregate_files(self, text_keys: List[str] = None, min_length: int = 10) -> bool:
-        """聚合所有文件，保持原始JSON结构"""
-        if text_keys is None:
-            text_keys = ['raw_content']  # 默认字段
+def validate_and_clean_text(text):
+    """验证并清理文本，确保tokenizer兼容"""
+    if not isinstance(text, str):
+        return None
+    
+    # 基本清理
+    text = text.strip()
+    if not text:
+        return None
+    
+    # 移除或替换问题字符
+    import re
+    
+    # 移除null字符和其他控制字符
+    text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+    
+    # 移除BOM
+    text = text.replace('\ufeff', '')
+    
+    # 统一换行符
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    
+    # 移除过多的连续空白字符
+    text = re.sub(r'\n{3,}', '\n\n', text)  # 最多保留两个连续换行
+    text = re.sub(r'[ \t]{2,}', ' ', text)  # 多个空格/制表符替换为单个空格
+    
+    # 确保文本不为空
+    text = text.strip()
+    if not text:
+        return None
+    
+    # 检查文本长度
+    if len(text) < 10:  # 太短的文本可能无意义
+        return None
+    
+    # 限制最大长度
+    max_length = 50000
+    if len(text) > max_length:
+        text = text[:max_length]
+        # 尝试在句号处截断，避免截断句子
+        last_period = text.rfind('.')
+        if last_period > max_length * 0.8:  # 如果句号位置合理
+            text = text[:last_period + 1]
+    
+    return text
 
-        if not self.input_files:
-            print("没有找到要处理的文件")
+
+def verify_text_file(file_path):
+    """验证文本文件是否可以被正确读取和tokenize"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # 基本检查
+        if not content or not content.strip():
             return False
+        
+        # 检查是否包含非法字符
+        if '\x00' in content:
+            return False
+        
+        # 检查是否是纯文本（不是JSON等结构化数据）
+        content_stripped = content.strip()
+        if (content_stripped.startswith('{') and content_stripped.endswith('}')) or \
+           (content_stripped.startswith('[') and content_stripped.endswith(']')):
+            # 可能是JSON，需要进一步验证
+            try:
+                import json
+                json.loads(content)
+                return False  # 如果是有效JSON，则不是纯文本
+            except:
+                pass  # 不是有效JSON，可能是包含{}[]的普通文本，继续
+        
+        return True
+        
+    except Exception as e:
+        print(f"  ⚠️  File verification failed: {e}")
+        return False
 
-        # 确保输出目录存在
-        output_path = Path(self.output_file)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        total_items = 0
-        processed_files = 0
-        all_field_names = set()
+def scan_json_files(base_dir, cache_path="./", mode="paths"):
+    """
+    扫描目录下的JSON/JSONL文件，排除.cache目录
+    mode: 'paths' - 创建文件路径索引, 'texts' - 提取文本内容
+    """
+    base_path = Path(base_dir)
+    cache_path_obj = Path(cache_path)
+    if not cache_path_obj.is_absolute():
+        caller_cwd = Path(os.environ.get('PWD', os.getcwd()))
+        cache_path_obj = caller_cwd / cache_path_obj
 
-        with open(self.output_file, 'w', encoding='utf-8') as f:
-            for file_path in self.input_files:
-                print(f"处理文件: {file_path}")
+    # 确保缓存目录存在
+    gpu_cache_dir = cache_path_obj / ".cache" / "gpu"
+    gpu_cache_dir.mkdir(parents=True, exist_ok=True)
 
-                file_path_obj = Path(file_path)
-                suffix = file_path_obj.suffix.lower()
+    text_input_file = gpu_cache_dir / "text_input.jsonl"
 
-                # 根据文件格式选择处理方法
-                if suffix == '.json':
-                    items = self.process_json_file(file_path, text_keys)
-                elif suffix == '.jsonl':
-                    items = self.process_jsonl_file(file_path, text_keys)
-                elif suffix == '.parquet':
-                    items = self.process_parquet_file(file_path, text_keys)
-                else:
-                    print(f"跳过不支持的文件格式: {file_path}")
-                    continue
+    print(f"Scanning directory: {base_path}")
+    print(f"Output file: {text_input_file}")
+    print(f"Mode: {'Extract text content' if mode == 'texts' else 'File paths only'}")
+    print("-" * 50)
 
-                # 写入有效数据
-                file_item_count = 0
-                for item in items:
-                    if self.validate_text_length(item, min_length):
-                        f.write(json.dumps(item, ensure_ascii=False) + '\n')
-                        total_items += 1
-                        file_item_count += 1
+    json_files = []
 
-                        # 收集所有字段名用于统计
-                        all_field_names.update(item.keys())
+    # 遍历所有文件和目录
+    for root, dirs, files in os.walk(base_path):
+        # 排除.cache目录
+        dirs[:] = [d for d in dirs if not d.startswith('.cache')]
 
-                if file_item_count > 0:
-                    processed_files += 1
-                    print(f"  提取数据: {file_item_count} 条")
-                else:
-                    print(f"  未找到有效数据")
+        # 检查每个文件
+        for file in files:
+            if file.endswith(('.json', '.jsonl')):
+                file_path = Path(root) / file
+                json_files.append(file_path.absolute())
+                print(f"Found: {file_path}")
 
-        print(f"\n聚合完成！")
-        print(f"处理文件: {processed_files}/{len(self.input_files)}")
-        print(f"总数据条目: {total_items}")
-        print(f"输出文件: {self.output_file}")
-        print(f"包含字段: {sorted(list(all_field_names))}")
+    if not json_files:
+        print("No JSON/JSONL files found!")
+        return False
 
-        return total_items > 0
+    print(f"\nTotal found: {len(json_files)} files")
+    
+    # 根据模式处理
+    if mode == "texts":
+        print("Mode: Extract text content and create text files...")
+        text_paths = create_text_files(json_files, cache_path_obj)
+        
+        if not text_paths:
+            print("❌ No valid text content found in any JSON files!")
+            return False
+        
+        # 创建text_input.jsonl文件，包含文本文件路径
+        try:
+            with open(text_input_file, 'w', encoding='utf-8') as f:
+                for text_path in text_paths:
+                    record = {"text_path": text_path}
+                    f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
-    def preview_files(self, max_files: int = 10):
-        """预览找到的文件"""
-        if not self.input_files:
-            print("没有找到文件")
-            return
+            print(f"✅ Created: {text_input_file}")
+            print(f"✅ Contains {len(text_paths)} text file paths")
+            return True
 
-        print(f"\n找到 {len(self.input_files)} 个文件:")
-        print("-" * 60)
+        except Exception as e:
+            print(f"❌ Error creating file: {e}")
+            return False
+            
+    else:
+        print("Mode: Create file path index...")
+        # 创建text_input.jsonl文件，包含JSON文件路径
+        try:
+            with open(text_input_file, 'w', encoding='utf-8') as f:
+                for json_file in json_files:
+                    record = {"text_path": str(json_file)}
+                    f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
-        for i, file_path in enumerate(self.input_files[:max_files]):
-            file_size = Path(file_path).stat().st_size
-            print(f"{i + 1:3d}. {file_path} ({file_size:,} bytes)")
+            print(f"✅ Created: {text_input_file}")
+            print(f"✅ Contains {len(json_files)} file paths")
+            return True
 
-        if len(self.input_files) > max_files:
-            print(f"... 还有 {len(self.input_files) - max_files} 个文件")
-        print("-" * 60)
+        except Exception as e:
+            print(f"❌ Error creating file: {e}")
+            return False
 
 
 def main():
-    parser = argparse.ArgumentParser(description='聚合多个文本数据文件为单个 pt_input.jsonl')
-    parser.add_argument('input_dir', nargs='?', default='./',
-                        help='输入目录路径 (默认: ./)')
-    parser.add_argument('-o', '--output', default='./.cache/pt_input.jsonl',
-                        help='输出文件路径 (默认: ./.cache/pt_input.jsonl)')
-    parser.add_argument('-k', '--keys', nargs='+', default=['raw_content'],
-                        help='要提取的文本字段 (默认: raw_content)')
-    parser.add_argument('-r', '--recursive', action='store_true', default=True,
-                        help='递归扫描子目录')
-    parser.add_argument('--no-recursive', action='store_false', dest='recursive',
-                        help='不递归扫描子目录')
-    parser.add_argument('--min-length', type=int, default=10,
-                        help='最小文本长度 (默认: 10)')
-    parser.add_argument('--preview', action='store_true',
-                        help='只预览文件，不执行聚合')
+    parser = argparse.ArgumentParser(description='Scan JSON/JSONL files and create input for text processing pipeline')
+    parser.add_argument('input_dir', nargs='?', default='./', help='Input directory to scan (default: ./)')
+    parser.add_argument('--cache', default='./', help='Cache directory path (default: ./)')
+    parser.add_argument('--mode', choices=['paths', 'texts'], default='texts', 
+                       help='Processing mode: "paths" for file paths only, "texts" for extract text content (default: texts)')
 
     args = parser.parse_args()
 
-    # 验证输入目录
-    input_path = Path(args.input_dir)
-    if not input_path.exists():
-        print(f"错误：输入目录 '{input_path}' 不存在")
-        return
+    print("Enhanced JSON/JSONL File Scanner & Text Processor")
+    print("=" * 60)
 
-    if not input_path.is_dir():
-        print(f"错误：'{input_path}' 不是目录")
-        return
+    success = scan_json_files(args.input_dir, args.cache, args.mode)
 
-    # 创建聚合器
-    aggregator = TextDataAggregator(args.output)
-
-    # 扫描文件
-    print(f"扫描目录: {input_path}")
-    print(f"递归模式: {'启用' if args.recursive else '禁用'}")
-    print(f"提取字段: {args.keys}")
-    print(f"最小长度: {args.min_length}")
-
-    aggregator.scan_directory(input_path, args.recursive)
-
-    if args.preview:
-        # 只预览
-        aggregator.preview_files()
-    else:
-        # 预览并聚合
-        aggregator.preview_files()
-        print("\n开始聚合...")
-
-        if aggregator.aggregate_files(args.keys, args.min_length):
-            print(f"\n✅ 聚合成功！现在可以运行: dataflow text2model")
+    if success:
+        print("✅ Processing completed successfully!")
+        if args.mode == 'texts':
+            print("Ready for CorpusTextSplitterBatch processing with extracted text files.")
+            print("\nNext steps:")
+            print("1. Run your text2qa pipeline")
+            print("2. The pipeline will process the text files automatically")
         else:
-            print(f"\n❌ 聚合失败，请检查输入文件")
+            print("Ready for CorpusTextSplitterBatch processing with JSON file paths.")
+            print("\nNote: Make sure your JSON files contain text fields like 'text', 'content', or 'body'")
+    else:
+        print("❌ Processing failed!")
 
 
 if __name__ == "__main__":

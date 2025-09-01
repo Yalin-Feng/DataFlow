@@ -52,6 +52,37 @@ def version_and_check_for_updates() -> None:
 
 
 # ---------------- 智能聊天功能 ----------------
+def check_current_dir_for_model():
+    """检查当前目录是否包含模型文件"""
+    current_dir = Path.cwd()
+
+    # 检查是否是标准的 HuggingFace 模型目录
+    model_files = [
+        "config.json",  # 模型配置文件
+        "pytorch_model.bin",  # PyTorch 模型权重
+        "model.safetensors",  # SafeTensors 格式权重
+        "tokenizer.json",  # 分词器文件
+        "tokenizer_config.json"  # 分词器配置
+    ]
+
+    # 检查 LoRA 适配器文件
+    adapter_files = [
+        "adapter_config.json",
+        "adapter_model.bin",
+        "adapter_model.safetensors"
+    ]
+
+    # 如果包含基础模型文件，认为是预训练模型目录
+    if any((current_dir / f).exists() for f in model_files):
+        return current_dir, "base_model"
+
+    # 如果包含适配器文件，认为是微调后的模型目录
+    if any((current_dir / f).exists() for f in adapter_files):
+        return current_dir, "fine_tuned_model"
+
+    return None, None
+
+
 def get_latest_trained_model(cache_path="./"):
     """查找最新训练的模型，支持text2model和pdf2model，按时间戳排序"""
     current_dir = Path.cwd()
@@ -122,21 +153,22 @@ def get_latest_trained_model(cache_path="./"):
 
 
 def smart_chat_command(model_path=None, cache_path="./"):
-    """智能聊天命令，自动查找最新模型"""
+    """智能聊天命令，优先使用当前目录的模型"""
 
     if model_path:
-        # 如果指定了模型路径，直接使用
+        # 如果明确指定了模型路径，直接使用
         model_path_obj = Path(model_path)
         if not model_path_obj.exists():
             print(f"Specified model path does not exist: {model_path}")
             return False
 
-        # Try to determine model type and call appropriate chat function
+        print(f"Using specified model: {model_path}")
+
+        # 根据路径判断模型类型
         if 'text2model' in str(model_path_obj):
             from dataflow.cli_funcs.cli_text import cli_text2model_chat
             return cli_text2model_chat(model_path)
         else:
-            # Try to import pdf2model chat function from different modules
             try:
                 from dataflow.cli_funcs.cli_pdf import cli_pdf2model_chat
                 return cli_pdf2model_chat(model_path, cache_path)
@@ -148,25 +180,45 @@ def smart_chat_command(model_path=None, cache_path="./"):
                     print("Cannot find PDF model chat function")
                     return False
 
-    # Auto search for latest model
-    print("Searching for the latest trained model...")
+    # 首先检查当前目录是否包含模型
+    print("Checking current directory for models...")
+    current_model_path, model_type = check_current_dir_for_model()
+
+    if current_model_path:
+        print(f"Found {model_type} in current directory: {current_model_path}")
+
+        # 对于当前目录的模型，默认使用base model方式启动聊天
+        # 这里可能需要根据实际的聊天函数接口调整
+        try:
+            # 尝试导入并使用通用的聊天函数
+            from dataflow.cli_funcs.cli_text import cli_text2model_chat
+            return cli_text2model_chat(str(current_model_path))
+        except ImportError:
+            print("Chat function not available for current model format")
+            return False
+
+    # 如果当前目录没有模型，再查找训练缓存目录
+    print("No model found in current directory.")
+    print("Searching for trained models in cache...")
     latest_model, model_type = get_latest_trained_model(cache_path)
 
     if not latest_model:
-        print("No trained model found")
-        print("Please run one of the following commands to train a model:")
-        print("  dataflow text2model train   # Train from text data")
-        print("  dataflow pdf2model train    # Train from PDF data")
+        print("No trained model found in cache either.")
+        print("Options:")
+        print(f"1. Change to a model directory and run: cd /path/to/model && dataflow chat")
+        print("2. Specify model path explicitly: dataflow chat --model /path/to/model")
+        print("3. Train a new model:")
+        print("   dataflow text2model train   # Train from text data")
+        print("   dataflow pdf2model train    # Train from PDF data")
         return False
 
-    print(f"Found latest {model_type} model: {latest_model}")
+    print(f"Found latest {model_type} model in cache: {latest_model}")
 
-    # Call appropriate chat function based on model type
+    # 使用缓存中的模型启动聊天
     if model_type == 'text2model':
         from dataflow.cli_funcs.cli_text import cli_text2model_chat
         return cli_text2model_chat(str(latest_model))
     elif model_type == 'pdf2model':
-        # Try to import pdf2model chat function from different modules
         try:
             from dataflow.cli_funcs.cli_pdf import cli_pdf2model_chat
             return cli_pdf2model_chat(str(latest_model), cache_path)
